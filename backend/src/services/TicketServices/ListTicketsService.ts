@@ -16,7 +16,7 @@ interface Request {
   showAll?: string;
   userId: string;
   withUnreadMessages?: string;
-  queueIds: number[];
+  queueIds: number[]; // vamos IGNORAR isso pra não vazar
 }
 
 interface Response {
@@ -28,20 +28,20 @@ interface Response {
 const ListTicketsService = async ({
   searchParam = "",
   pageNumber = "1",
-  queueIds,
   status,
   date,
   showAll,
   userId,
   withUnreadMessages
 }: Request): Promise<Response> => {
-  let whereCondition: Filterable["where"] = {
-    [Op.or]: [{ userId }, { status: "pending" }],
-    queueId: { [Op.or]: [queueIds, null] }
-  };
-  let includeCondition: Includeable[];
+  // Sempre pegar filas do usuário no backend (sem confiar no frontend)
+  const user = await ShowUserService(userId);
+  const userQueueIds = user.queues?.map(queue => queue.id) || [];
 
-  includeCondition = [
+  const isAdmin = user.profile === "admin";
+
+  // Base do include
+  let includeCondition: Includeable[] = [
     {
       model: Contact,
       as: "contact",
@@ -59,10 +59,48 @@ const ListTicketsService = async ({
     }
   ];
 
-  if (showAll === "true") {
-    whereCondition = { queueId: { [Op.or]: [queueIds, null] } };
+  // Base do WHERE:
+  // - Admin: não limita por fila
+  // - Não-admin: limita por filas do usuário (e opcionalmente queueId null)
+  let whereCondition: Filterable["where"];
+
+  if (isAdmin) {
+    whereCondition = {};
+  } else {
+    // IMPORTANTE:
+    // Se você NÃO quer que usuários vejam tickets "sem fila", remova o `null` daqui.
+    whereCondition = {
+      queueId: { [Op.or]: [userQueueIds, null] }
+    };
   }
 
+  // Regra padrão do Whaticket: mostrar tickets do usuário OU pendentes
+  // Mas SEM vazar para filas fora do escopo acima.
+  if (!isAdmin) {
+    whereCondition = {
+      ...whereCondition,
+      [Op.or]: [{ userId }, { status: "pending" }]
+    };
+  } else {
+    // Admin mantém comportamento original, mas sem filtro de fila
+    whereCondition = {
+      [Op.or]: [{ userId }, { status: "pending" }]
+    };
+  }
+
+  // showAll: no padrão do Whaticket, "showAll" costuma mostrar tudo das filas selecionadas
+  // Aqui: não-admin continua restrito às filas dele.
+  if (showAll === "true") {
+    if (isAdmin) {
+      whereCondition = {}; // admin vê tudo
+    } else {
+      whereCondition = {
+        queueId: { [Op.or]: [userQueueIds, null] }
+      };
+    }
+  }
+
+  // status específico
   if (status) {
     whereCondition = {
       ...whereCondition,
@@ -70,6 +108,7 @@ const ListTicketsService = async ({
     };
   }
 
+  // search
   if (searchParam) {
     const sanitizedSearchParam = searchParam.toLocaleLowerCase().trim();
 
@@ -113,23 +152,31 @@ const ListTicketsService = async ({
     };
   }
 
+  // date (mantive sua lógica, mas atenção: ela SOBRESCREVIA tudo antes)
+  // Pra não furar o filtro de fila, a gente combina com o where existente.
   if (date) {
     whereCondition = {
+      ...whereCondition,
       createdAt: {
         [Op.between]: [+startOfDay(parseISO(date)), +endOfDay(parseISO(date))]
       }
     };
   }
 
+  // unread filter
   if (withUnreadMessages === "true") {
-    const user = await ShowUserService(userId);
-    const userQueueIds = user.queues.map(queue => queue.id);
-
     whereCondition = {
-      [Op.or]: [{ userId }, { status: "pending" }],
-      queueId: { [Op.or]: [userQueueIds, null] },
+      ...whereCondition,
       unreadMessages: { [Op.gt]: 0 }
     };
+
+    // garante a regra original (userId OU pending) se alguém mexeu acima
+    if (!isAdmin && showAll !== "true") {
+      whereCondition = {
+        ...whereCondition,
+        [Op.or]: [{ userId }, { status: "pending" }]
+      };
+    }
   }
 
   const limit = 40;
