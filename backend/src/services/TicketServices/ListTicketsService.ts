@@ -16,7 +16,13 @@ interface Request {
   showAll?: string;
   userId: string;
   withUnreadMessages?: string;
-  queueIds: number[];
+
+  /**
+   * ATENÇÃO:
+   * queueIds NÃO deve ser confiável vindo do front.
+   * Vamos usar apenas para ADMIN filtrar.
+   */
+  queueIds?: number[];
 }
 
 interface Response {
@@ -28,20 +34,29 @@ interface Response {
 const ListTicketsService = async ({
   searchParam = "",
   pageNumber = "1",
-  queueIds,
   status,
   date,
   showAll,
   userId,
-  withUnreadMessages
+  withUnreadMessages,
+  queueIds = []
 }: Request): Promise<Response> => {
-  let whereCondition: Filterable["where"] = {
-    [Op.or]: [{ userId }, { status: "pending" }],
-    queueId: { [Op.or]: [queueIds, null] }
-  };
-  let includeCondition: Includeable[];
+  // Sempre carrega o usuário e suas filas (regra de permissão)
+  const user = await ShowUserService(userId);
+  const userQueueIds = (user.queues || []).map(queue => queue.id);
 
-  includeCondition = [
+  const isAdmin = user.profile === "admin" || user.profile === "superadmin";
+
+  /**
+   * Filas efetivas:
+   * - Usuário comum: SEMPRE suas filas
+   * - Admin: pode filtrar por queueIds se vierem preenchidos; senão, vê tudo
+   */
+  const effectiveQueueIds =
+    isAdmin && queueIds.length > 0 ? queueIds : userQueueIds;
+
+  // INCLUDE padrão
+  let includeCondition: Includeable[] = [
     {
       model: Contact,
       as: "contact",
@@ -59,10 +74,48 @@ const ListTicketsService = async ({
     }
   ];
 
-  if (showAll === "true") {
-    whereCondition = { queueId: { [Op.or]: [queueIds, null] } };
+  // WHERE base
+  let whereCondition: Filterable["where"] = {};
+
+  /**
+   * Permissão por fila:
+   * - Usuário comum: só enxerga tickets das filas associadas (queueId IN userQueueIds)
+   * - Admin:
+   *   - se effectiveQueueIds tem valores (filtrando), aplica IN
+   *   - se não tem valores (sem filtro), não aplica nada (vê tudo)
+   */
+  if (!isAdmin) {
+    // Se o usuário não estiver associado a nenhuma fila, não mostra nada
+    whereCondition = {
+      ...whereCondition,
+      queueId: { [Op.in]: effectiveQueueIds.length ? effectiveQueueIds : [-1] }
+    };
+  } else {
+    if (effectiveQueueIds.length > 0) {
+      whereCondition = {
+        ...whereCondition,
+        queueId: { [Op.in]: effectiveQueueIds }
+      };
+    }
   }
 
+  /**
+   * Regra original de visibilidade (mantida):
+   * - Usuário vê seus tickets OU tickets pending
+   *
+   * OBS: Isso continua respeitando a permissão por fila acima.
+   */
+  if (showAll === "true") {
+    // showAll: remove o filtro de "meus tickets/pending"
+    // mas mantém permissão por fila (já aplicada acima)
+  } else {
+    whereCondition = {
+      ...whereCondition,
+      [Op.or]: [{ userId }, { status: "pending" }]
+    };
+  }
+
+  // Filtrar por status (mantém todos os filtros anteriores)
   if (status) {
     whereCondition = {
       ...whereCondition,
@@ -70,6 +123,17 @@ const ListTicketsService = async ({
     };
   }
 
+  // Filtrar por data (CORREÇÃO: antes você sobrescrevia o where inteiro)
+  if (date) {
+    whereCondition = {
+      ...whereCondition,
+      createdAt: {
+        [Op.between]: [+startOfDay(parseISO(date)), +endOfDay(parseISO(date))]
+      }
+    };
+  }
+
+  // Filtro por pesquisa (mantém todos os filtros anteriores)
   if (searchParam) {
     const sanitizedSearchParam = searchParam.toLocaleLowerCase().trim();
 
@@ -101,7 +165,8 @@ const ListTicketsService = async ({
             `%${sanitizedSearchParam}%`
           )
         },
-        { "$contact.number$": { [Op.like]: `%${sanitizedSearchParam}%` } },
+        { "$contact.number$": { [Op.like]: `%${sanitizedSearchParam}%` },
+        },
         {
           "$message.body$": where(
             fn("LOWER", col("body")),
@@ -113,21 +178,14 @@ const ListTicketsService = async ({
     };
   }
 
-  if (date) {
-    whereCondition = {
-      createdAt: {
-        [Op.between]: [+startOfDay(parseISO(date)), +endOfDay(parseISO(date))]
-      }
-    };
-  }
-
+  /**
+   * Apenas tickets com mensagens não lidas:
+   * - Mantém a permissão por fila
+   * - Mantém regra "meus/pending" quando showAll != true
+   */
   if (withUnreadMessages === "true") {
-    const user = await ShowUserService(userId);
-    const userQueueIds = user.queues.map(queue => queue.id);
-
     whereCondition = {
-      [Op.or]: [{ userId }, { status: "pending" }],
-      queueId: { [Op.or]: [userQueueIds, null] },
+      ...whereCondition,
       unreadMessages: { [Op.gt]: 0 }
     };
   }
