@@ -2,16 +2,14 @@
 # BUILD STAGE
 # -----------------------
 FROM node:18-bookworm AS build
-
 WORKDIR /usr/src/app
 
-# Copia manifestos
+# No build precisa ter devDependencies (typescript + @types)
+ENV NODE_ENV=development
+
 COPY package*.json ./
+RUN npm install --include=dev
 
-# IMPORTANTE: sem package-lock, não dá pra usar npm ci
-RUN npm install
-
-# Copia o resto e builda
 COPY . .
 RUN npm run build
 
@@ -20,10 +18,8 @@ RUN npm run build
 # RUNTIME STAGE
 # -----------------------
 FROM node:18-bookworm-slim AS runtime
-
 WORKDIR /usr/src/app
 
-# Dependências necessárias pro Chromium rodar (Puppeteer/whatsapp-web.js)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
     ca-certificates \
@@ -54,28 +50,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
 
-# Instala Chromium do Debian (mais simples e estável em container)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
   && rm -rf /var/lib/apt/lists/*
 
-# Variáveis recomendadas pro Puppeteer
 ENV NODE_ENV=production
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV CHROME_BIN=/usr/bin/chromium
 
-# Copia node_modules e build do estágio de build
 COPY --from=build /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
 COPY --from=build /usr/src/app/package*.json ./
 
-# Porta: ajuste para a que seu app usa (você mostrou 8080 no log)
 ENV PORT=8080
 EXPOSE 8080
 
 ENTRYPOINT ["dumb-init", "--"]
-
-# Se você usa DB_HOST/porta, mantenha o seu fluxo aqui.
-# Se não tiver dockerize no projeto, REMOVA a linha do dockerize.
 CMD ["node", "dist/server.js"]
