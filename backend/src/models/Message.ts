@@ -38,8 +38,7 @@ class Message extends Model<Message> {
   get mediaUrl(): string | null {
     if (this.getDataValue("mediaUrl")) {
       return `${process.env.BACKEND_URL}:${
-        process.env.PROXY_PORT
-      }/public/${this.getDataValue("mediaUrl")}`;
+        process.env}/public/${this.getDataValue("mediaUrl")}`;
     }
     return null;
   }
