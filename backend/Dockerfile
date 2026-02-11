@@ -68,3 +68,10 @@ EXPOSE 8080
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "dist/server.js"]
+
+# cria usuário não-root
+RUN groupadd -r pptr && useradd -r -g pptr -G audio,video pptr \
+  && mkdir -p /home/pptr/Downloads \
+  && chown -R pptr:pptr /home/pptr /usr/src/app
+
+USER pptr
