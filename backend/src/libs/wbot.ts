@@ -32,6 +32,25 @@ const syncUnreadMessages = async (wbot: Session) => {
   }
 };
 
+const buildPuppeteerArgs = (): string[] => {
+  // Necessário para rodar Chrome/Chromium dentro de container (root) sem sandbox
+  const defaultArgs = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--no-zygote",
+    "--single-process"
+  ];
+
+  const envArgs = (process.env.CHROME_ARGS || "")
+    .split(" ")
+    .map(a => a.trim())
+    .filter(Boolean);
+
+  // remove duplicados mantendo ordem
+  return [...new Set([...defaultArgs, ...envArgs])];
+};
+
 export const initWbot = async (whatsapp: Whatsapp): Promise<Session> => {
   return new Promise((resolve, reject) => {
     try {
@@ -43,7 +62,7 @@ export const initWbot = async (whatsapp: Whatsapp): Promise<Session> => {
         sessionCfg = JSON.parse(whatsapp.session);
       }
 
-      const args: String = process.env.CHROME_ARGS || "";
+      const puppeteerArgs = buildPuppeteerArgs();
 
       const wbot: Session = new Client({
         session: sessionCfg,
@@ -52,7 +71,7 @@ export const initWbot = async (whatsapp: Whatsapp): Promise<Session> => {
           executablePath: process.env.CHROME_BIN || undefined,
           // @ts-ignore
           browserWSEndpoint: process.env.CHROME_WS || undefined,
-          args: args.split(" ")
+          args: puppeteerArgs
         }
       });
 
@@ -75,7 +94,7 @@ export const initWbot = async (whatsapp: Whatsapp): Promise<Session> => {
         });
       });
 
-      wbot.on("authenticated", async session => {
+      wbot.on("authenticated", async () => {
         logger.info(`Session: ${sessionName} AUTHENTICATED`);
       });
 
@@ -129,6 +148,7 @@ export const initWbot = async (whatsapp: Whatsapp): Promise<Session> => {
       });
     } catch (err) {
       logger.error(err);
+      reject(err as Error);
     }
   });
 };
