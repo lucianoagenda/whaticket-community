@@ -35,10 +35,17 @@ class Message extends Model<Message> {
   body: string;
 
   @Column(DataType.STRING)
-  get mediaUrl(): string | null {
+ /* get mediaUrl(): string | null {
     if (this.getDataValue("mediaUrl")) {
       return `${process.env.BACKEND_URL}:${
         process.env}/public/${this.getDataValue("mediaUrl")}`;
+    }
+    return null;
+  }*/
+
+    get mediaUrl(): string | null {
+    if (this.getDataValue("mediaUrl")) {
+      return `${process.env.BACKEND_URL}/public/${this.getDataValue("mediaUrl")}`;
     }
     return null;
   }
