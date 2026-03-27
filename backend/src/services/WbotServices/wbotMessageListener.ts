@@ -262,10 +262,9 @@ const isValidMsg = (msg: WbotMessage): boolean => {
   return false;
 };
 
-const handleMessage = async (
-  msg: WbotMessage,
-  wbot: Session
-): Promise<void> => {
+const handleMessage = async (msg: WbotMessage, wbot: Session): Promise<void> => {
+  if (!msg) return;
+
   if (!isValidMsg(msg)) {
     return;
   }
@@ -274,29 +273,57 @@ const handleMessage = async (
     let msgContact: WbotContact;
     let groupContact: Contact | undefined;
 
-    if (msg.fromMe) {
-      // messages sent automatically by wbot have a special character in front of it
-      // if so, this message was already been stored in database;
-      if (/\u200e/.test(msg.body[0])) return;
+    const safeBody = msg.body || "";
 
-      // media messages sent from me from cell phone, first comes with "hasMedia = false" and type = "image/ptt/etc"
-      // in this case, return and let this message be handled by "media_uploaded" event, when it will have "hasMedia = true"
+    if (msg.fromMe) {
+      if (safeBody && /\u200e/.test(safeBody[0])) return;
 
       if (
         !msg.hasMedia &&
         msg.type !== "location" &&
         msg.type !== "chat" &&
         msg.type !== "vcard"
-        //&& msg.type !== "multi_vcard"
-      )
+      ) {
         return;
+      }
+
+      if (!msg.to) {
+        logger.warn("Mensagem enviada sem destino definido.");
+        return;
+      }
 
       msgContact = await wbot.getContactById(msg.to);
     } else {
       msgContact = await msg.getContact();
     }
 
-    const chat = await msg.getChat();
+    const chat = await msg.getChat?.().catch(() => null);
+
+    if (!chat) {
+      logger.warn({
+        messageId: msg?.id?.id,
+        from: msg?.from,
+        to: msg?.to,
+        type: msg?.type
+      }, "Chat indefinido ao processar mensagem do WhatsApp");
+      return;
+    }
+
+    // proteção extra para versões novas do WA Web
+    const isNewsletter = Boolean(
+      chat &&
+      typeof chat === "object" &&
+      "isNewsletter" in chat &&
+      (chat as any).isNewsletter
+    );
+
+    if (isNewsletter) {
+      logger.info({
+        messageId: msg?.id?.id,
+        from: msg?.from
+      }, "Mensagem de newsletter ignorada");
+      return;
+    }
 
     if (chat.isGroup) {
       let msgGroupContact;
@@ -309,18 +336,18 @@ const handleMessage = async (
 
       groupContact = await verifyContact(msgGroupContact);
     }
+
     const whatsapp = await ShowWhatsAppService(wbot.id!);
-
-    const unreadMessages = msg.fromMe ? 0 : chat.unreadCount;
-
+    const unreadMessages = msg.fromMe ? 0 : chat.unreadCount || 0;
     const contact = await verifyContact(msgContact);
 
     if (
       unreadMessages === 0 &&
       whatsapp.farewellMessage &&
-      formatBody(whatsapp.farewellMessage, contact) === msg.body
-    )
+      formatBody(whatsapp.farewellMessage, contact) === safeBody
+    ) {
       return;
+    }
 
     const ticket = await FindOrCreateTicketService(
       contact,
@@ -347,24 +374,28 @@ const handleMessage = async (
 
     if (msg.type === "vcard") {
       try {
-        const array = msg.body.split("\n");
+        const array = safeBody.split("\n");
         const obj = [];
-        let contact = "";
+        let contactName = "";
+
         for (let index = 0; index < array.length; index++) {
           const v = array[index];
           const values = v.split(":");
+
           for (let ind = 0; ind < values.length; ind++) {
             if (values[ind].indexOf("+") !== -1) {
               obj.push({ number: values[ind] });
             }
+
             if (values[ind].indexOf("FN") !== -1) {
-              contact = values[ind + 1];
+              contactName = values[ind + 1];
             }
           }
         }
+
         for await (const ob of obj) {
-          const cont = await CreateContactService({
-            name: contact,
+          await CreateContactService({
+            name: contactName,
             number: ob.number.replace(/\D/g, "")
           });
         }
@@ -372,67 +403,6 @@ const handleMessage = async (
         console.log(error);
       }
     }
-
-    /* if (msg.type === "multi_vcard") {
-      try {
-        const array = msg.vCards.toString().split("\n");
-        let name = "";
-        let number = "";
-        const obj = [];
-        const conts = [];
-        for (let index = 0; index < array.length; index++) {
-          const v = array[index];
-          const values = v.split(":");
-          for (let ind = 0; ind < values.length; ind++) {
-            if (values[ind].indexOf("+") !== -1) {
-              number = values[ind];
-            }
-            if (values[ind].indexOf("FN") !== -1) {
-              name = values[ind + 1];
-            }
-            if (name !== "" && number !== "") {
-              obj.push({
-                name,
-                number
-              });
-              name = "";
-              number = "";
-            }
-          }
-        }
-
-        // eslint-disable-next-line no-restricted-syntax
-        for await (const ob of obj) {
-          try {
-            const cont = await CreateContactService({
-              name: ob.name,
-              number: ob.number.replace(/\D/g, "")
-            });
-            conts.push({
-              id: cont.id,
-              name: cont.name,
-              number: cont.number
-            });
-          } catch (error) {
-            if (error.message === "ERR_DUPLICATED_CONTACT") {
-              const cont = await GetContactService({
-                name: ob.name,
-                number: ob.number.replace(/\D/g, ""),
-                email: ""
-              });
-              conts.push({
-                id: cont.id,
-                name: cont.name,
-                number: cont.number
-              });
-            }
-          }
-        }
-        msg.body = JSON.stringify(conts);
-      } catch (error) {
-        console.log(error);
-      }
-    } */
   } catch (err) {
     Sentry.captureException(err);
     logger.error(`Error handling whatsapp message: Err: ${err}`);
