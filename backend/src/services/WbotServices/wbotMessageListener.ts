@@ -262,7 +262,10 @@ const isValidMsg = (msg: WbotMessage): boolean => {
   return false;
 };
 
-const handleMessage = async (msg: WbotMessage, wbot: Session): Promise<void> => {
+const handleMessage = async (
+  msg: WbotMessage,
+  wbot: Session
+): Promise<void> => {
   if (!msg) return;
 
   if (!isValidMsg(msg)) {
@@ -272,7 +275,6 @@ const handleMessage = async (msg: WbotMessage, wbot: Session): Promise<void> => 
   try {
     let msgContact: WbotContact;
     let groupContact: Contact | undefined;
-
     const safeBody = msg.body || "";
 
     if (msg.fromMe) {
@@ -288,7 +290,10 @@ const handleMessage = async (msg: WbotMessage, wbot: Session): Promise<void> => 
       }
 
       if (!msg.to) {
-        logger.warn("Mensagem enviada sem destino definido.");
+        logger.warn({
+          messageId: msg?.id?.id,
+          type: msg?.type
+        }, "Mensagem enviada sem destino definido");
         return;
       }
 
@@ -305,11 +310,10 @@ const handleMessage = async (msg: WbotMessage, wbot: Session): Promise<void> => 
         from: msg?.from,
         to: msg?.to,
         type: msg?.type
-      }, "Chat indefinido ao processar mensagem do WhatsApp");
+      }, "Chat indefinido ao processar mensagem");
       return;
     }
 
-    // proteção extra para versões novas do WA Web
     const isNewsletter = Boolean(
       chat &&
       typeof chat === "object" &&
